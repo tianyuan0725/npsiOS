@@ -20,6 +20,11 @@ class NPSClient: ObservableObject {
 
     private var session: URLSession
     private let cookieStorage = HTTPCookieStorage.shared
+    /// Captured session cookie (e.g. "beegosessionID=xxxx") replayed on every
+    /// request. NPS authenticates purely via this cookie; replaying it manually
+    /// is more robust than relying on URLSession's automatic cookie handling
+    /// (which can silently drop the session between requests on some setups).
+    private var sessionCookie: String?
 
     private let kBase = "baseURL"
     private let kUser = "username"
@@ -53,12 +58,29 @@ class NPSClient: ObservableObject {
         KeychainHelper.delete(account: kBase)
         KeychainHelper.delete(account: kUser)
         KeychainHelper.delete(account: kPass)
+        sessionCookie = nil
         if let cookies = cookieStorage.cookies {
             for c in cookies { cookieStorage.deleteCookie(c) }
         }
     }
 
     // MARK: - URL building
+    /// Attach the captured session cookie to an outgoing request.
+    private func applyAuth(_ req: inout URLRequest) {
+        if let c = sessionCookie {
+            req.setValue(c, forHTTPHeaderField: "Cookie")
+        }
+    }
+
+    /// Grab the NPS session cookie (beegosessionID) from the shared storage and
+    /// stash it for manual replay on later requests.
+    private func captureSessionCookie(for url: URL) {
+        guard let cookies = cookieStorage.cookies(for: url) else { return }
+        if let sess = cookies.first(where: { $0.name.lowercased() == "beegosessionid" }) {
+            sessionCookie = "\(sess.name)=\(sess.value)"
+        }
+    }
+
     private func endpoint(_ path: String) -> URL? {
         var base = baseURL.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !base.isEmpty else { return nil }
@@ -106,6 +128,7 @@ class NPSClient: ObservableObject {
             let (data, _) = try await session.data(for: req)
             let result = try? JSONDecoder().decode(ApiResult.self, from: data)
             if result?.status == 1 {
+                captureSessionCookie(for: url)
                 if save {
                     saveCredentials(url: baseURL, username: username, password: password)
                 }
@@ -127,8 +150,10 @@ class NPSClient: ObservableObject {
 
     func logout() {
         if let url = endpoint("Login/Out") {
+            var req = URLRequest(url: url)
+            applyAuth(&req)
             Task {
-                try? await session.data(for: URLRequest(url: url))
+                try? await session.data(for: req)
             }
         }
         clearCredentials()
@@ -145,6 +170,7 @@ class NPSClient: ObservableObject {
         }
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
+        applyAuth(&req)
         do {
             let (data, _) = try await session.data(for: req)
             if isHTML(data) { markSessionExpired(); return nil }
@@ -163,6 +189,7 @@ class NPSClient: ObservableObject {
         req.httpMethod = "POST"
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         req.httpBody = formBody(params)
+        applyAuth(&req)
         do {
             let (data, _) = try await session.data(for: req)
             if isHTML(data) { markSessionExpired(); return nil }
@@ -184,6 +211,7 @@ class NPSClient: ObservableObject {
         req.httpMethod = "POST"
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         req.httpBody = formBody(params)
+        applyAuth(&req)
         do {
             let (data, _) = try await session.data(for: req)
             if isHTML(data) { markSessionExpired(); return nil }
