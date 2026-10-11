@@ -54,13 +54,11 @@ class NPSClient: ObservableObject {
         if let url = KeychainHelper.read(account: kBase) { self.baseURL = url }
         if let user = KeychainHelper.read(account: kUser) { self.username = user }
         if let pass = KeychainHelper.read(account: kPass) { self.password = pass }
-        // Silent auto-login when a complete set of credentials exists.
-        if let url = KeychainHelper.read(account: kBase),
-           let user = KeychainHelper.read(account: kUser),
-           let pass = KeychainHelper.read(account: kPass),
-           !url.isEmpty, !user.isEmpty, !pass.isEmpty {
-            Task { await login(username: user, password: pass, save: false) }
-        }
+        // NOTE: no silent auto-login here on purpose. A background auto-login races
+        // with a manual login: the late auto-login response overwrites the FRESH
+        // sessionCookie captured by the manual one (NPS invalidates/rotates session
+        // data), so dashboard requests get 302'd back to the login page seconds after
+        // successfully entering the app. Login is always explicit now.
     }
 
     // MARK: - Credentials
@@ -124,10 +122,14 @@ class NPSClient: ObservableObject {
         return first == 0x3C // '<'
     }
 
-    private func markSessionExpired() {
+    private func markSessionExpired(path: String, httpStatus: Int) {
         sessionExpired = true
         isLoggedIn = false
-        errorMessage = "登录已过期，请重新登录"
+        if sessionCookie == nil {
+            errorMessage = "会话Cookie未捕获，请求被重定向到登录页。路径 \(path)，HTTP \(httpStatus)。请重新登录；若反复出现请反馈此提示。"
+        } else {
+            errorMessage = "服务器拒绝了会话并跳转登录页。路径 \(path)，HTTP \(httpStatus)，已携带会话Cookie。请重试；若反复出现请把此提示截图反馈。"
+        }
     }
 
     // MARK: - Login / Logout
@@ -227,11 +229,12 @@ class NPSClient: ObservableObject {
         req.httpMethod = "GET"
         applyAuth(&req)
         do {
-            let (data, _) = try await session.data(for: req)
-            if isHTML(data) { markSessionExpired(); return nil }
+            let (data, resp) = try await session.data(for: req)
+            let st = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            if isHTML(data) { markSessionExpired(path: path, httpStatus: st); return nil }
             return try JSONDecoder().decode(T.self, from: data)
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = "网络错误（\(path)）：\(error.localizedDescription)"
             return nil
         }
     }
@@ -246,15 +249,16 @@ class NPSClient: ObservableObject {
         req.httpBody = formBody(params)
         applyAuth(&req)
         do {
-            let (data, _) = try await session.data(for: req)
-            if isHTML(data) { markSessionExpired(); return nil }
+            let (data, resp) = try await session.data(for: req)
+            let st = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            if isHTML(data) { markSessionExpired(path: path, httpStatus: st); return nil }
             let r = try? JSONDecoder().decode(ApiResult.self, from: data)
             if let r = r, r.status != 1 {
                 errorMessage = r.msg
             }
             return r
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = "网络错误（\(path)）：\(error.localizedDescription)"
             return nil
         }
     }
@@ -268,11 +272,12 @@ class NPSClient: ObservableObject {
         req.httpBody = formBody(params)
         applyAuth(&req)
         do {
-            let (data, _) = try await session.data(for: req)
-            if isHTML(data) { markSessionExpired(); return nil }
+            let (data, resp) = try await session.data(for: req)
+            let st = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            if isHTML(data) { markSessionExpired(path: path, httpStatus: st); return nil }
             return try JSONDecoder().decode(SingleResponse<T>.self, from: data)
         } catch {
-            errorMessage = error.localizedDescription
+            errorMessage = "网络错误（\(path)）：\(error.localizedDescription)"
             return nil
         }
     }
