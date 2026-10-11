@@ -61,7 +61,7 @@ struct SettingsView: View {
                 Section("关于 NPS iOS") {
                     LabeledRow(title: "项目", value: "https://github.com/ehang-io/nps")
                     LabeledRow(title: "功能", value: "管理 NPS 内网穿透服务器")
-                    LabeledRow(title: "版本", value: "1.0.0")
+                    LabeledRow(title: "版本", value: "1.0.1")
                     Text("本应用通过 NPS Web 后台 API 管理你的服务器：查看客户端/隧道/主机、增删改、启停隧道、查看流量与在线状态。凭据保存在本机钥匙串，不上传任何第三方。")
                         .font(.caption)
                         .foregroundColor(.secondary)
