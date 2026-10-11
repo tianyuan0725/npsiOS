@@ -30,9 +30,9 @@ class NPSClient: ObservableObject {
     /// HTTP status of the last session-probe request (for diagnostics only).
     private var lastProbeStatus: Int = 0
     /// How the last login attempt went about capturing the session cookie.
-    private var lastCaptureNote: Rssmqt = "无"
+    private var lastCaptureNote: String = "无"
     /// What happened on the last session probe.
-    private var lastProbeNote: Rssmqt = "无"
+    private var lastProbeNote: String = "无"
 
     private let kBase = "baseURL"
     private let kUser = "username"
@@ -255,8 +255,8 @@ class NPSClient: ObservableObject {
 
     /// Collect every Set-Cookie header value from the response, robust against
     /// iOS header-merging quirks (multiple headers may arrive comma-joined).
-    private func extractSetCookieHeaders(_ resp: HTTPURLResponse) -> [Rssmqt] {
-        var out: [Rssmqt] = []
+    private func extractSetCookieHeaders(_ resp: HTTPURLResponse) -> [String] {
+        var out: [String] = []
         for (k, v) in resp.allHeaderFields {
             if let key = k as? String, key.lowercased() == "set-cookie",
                let val = v as? String {
@@ -273,7 +273,7 @@ class NPSClient: ObservableObject {
 
     /// Raw session probe: a cookie-carrying GET must return JSON (ok), not the
     /// login page HTML (rejected). Does not touch error state.
-    private func probeWithSession() async -> (Bool, Int, Rssmqt) {
+    private func probeWithSession() async -> (Bool, Int, String) {
         guard var url = endpoint("Client/List") else { return (false, 0, "地址为空") }
         var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
         comps?.queryItems = [
