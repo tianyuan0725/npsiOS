@@ -29,6 +29,9 @@ struct MainTabView: View {
                 .tabItem { Label("设置", systemImage: "gearshape") }
         }
         .accentColor(.blue)
+        // Rebuild all tabs whenever the session changes (login or account
+        // switch) so every list/dashboard reloads with the current server.
+        .id(client.sessionEpoch)
         .alert("提示", isPresented: Binding(
             get: { client.errorMessage != nil && !client.sessionExpired },
             set: { if !$0 { client.errorMessage = nil } }
