@@ -271,29 +271,22 @@ class NPSClient: ObservableObject {
         return out
     }
 
-    /// Raw session probe: a cookie-carrying GET must return JSON (ok), not the
-    /// login page HTML (rejected). Does not touch error state.
+    /// Raw session probe: a cookie-carrying POST to the client table must return
+    /// a JSON table (ok). Without a valid session the server redirects to the
+    /// login page (HTML). Does not touch error state.
     private func probeWithSession() async -> (Bool, Int, String) {
-        guard var url = endpoint("Client/List") else { return (false, 0, "地址为空") }
-        var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
-        comps?.queryItems = [
-            URLQueryItem(name: "offset", value: "0"),
-            URLQueryItem(name: "limit", value: "1"),
-            URLQueryItem(name: "search", value: ""),
-            URLQueryItem(name: "sort", value: "Id"),
-            URLQueryItem(name: "order", value: "ASC"),
-        ]
-        if let u = comps?.url { url = u }
+        guard let url = endpoint("client/list") else { return (false, 0, "地址为空") }
         var req = URLRequest(url: url)
-        req.httpMethod = "GET"
+        req.httpMethod = "POST"
+        req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        req.httpBody = formBody(["offset": "0", "limit": "1", "search": "", "sort": "", "order": ""])
         applyAuth(&req)
         let carried = sessionCookie != nil ? "有(指纹 \(cookieFingerprint()))" : "无(裸请求)"
         do {
             let (data, resp) = try await session.data(for: req)
             let st = (resp as? HTTPURLResponse)?.statusCode ?? 0
-            let finalPath = (resp as? HTTPURLResponse)?.url?.path ?? "?"
             let ok = !isHTML(data)
-            return (ok, st, "携带Cookie=\(carried)，HTTP \(st)，最终路径 \(finalPath)")
+            return (ok, st, "携带Cookie=\(carried)，HTTP \(st)，响应=\(ok ? "JSON表格" : "HTML登录页")")
         } catch {
             return (false, 0, "携带Cookie=\(carried)，网络错误：\(error.localizedDescription)")
         }
@@ -328,22 +321,23 @@ class NPSClient: ObservableObject {
         isLoggedIn = false
     }
 
-    // MARK: - GET (JSON table / object)
-    private func get<T: Codable>(_ path: String, query: [String: String] = [:]) async -> T? {
-        guard var url = endpoint(path) else { return nil }
-        if !query.isEmpty {
-            var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
-            comps?.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
-            if let u = comps?.url { url = u }
-        }
+    // MARK: - POST form -> JSON table
+    /// NPS serves list data ONLY via POST — the web panel's bootstrap-table posts
+    /// to the very URL that, on GET, renders the HTML page instead. Requesting
+    /// lists with GET returned that page HTML, which the app misread as "session
+    /// expired" and caused the endless auto-logout loop.
+    private func postTable<T: Codable>(_ path: String, params: [String: String]) async -> TableResponse<T>? {
+        guard let url = endpoint(path) else { return nil }
         var req = URLRequest(url: url)
-        req.httpMethod = "GET"
+        req.httpMethod = "POST"
+        req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        req.httpBody = formBody(params)
         applyAuth(&req)
         do {
             let (data, resp) = try await session.data(for: req)
             let st = (resp as? HTTPURLResponse)?.statusCode ?? 0
             if isHTML(data) { markSessionExpired(path: path, httpStatus: st); return nil }
-            return try JSONDecoder().decode(T.self, from: data)
+            return try JSONDecoder().decode(TableResponse<T>.self, from: data)
         } catch {
             errorMessage = "网络错误（\(path)）：\(error.localizedDescription)"
             return nil
@@ -395,8 +389,9 @@ class NPSClient: ObservableObject {
 
     // MARK: - Clients
     func getClients(search: String = "", limit: Int = 10000) async -> [Client] {
-        let resp: TableResponse<Client>? = await get("Client/List", query: [
-            "offset": "0", "limit": "\(limit)", "search": search, "sort": "Id", "order": "ASC"
+        // NOTE: sort/order MUST stay empty — NPS panics (beego 500) on sort=Id.
+        let resp: TableResponse<Client>? = await postTable("client/list", params: [
+            "offset": "0", "limit": "\(limit)", "search": search, "sort": "", "order": ""
         ])
         return resp?.rows ?? []
     }
@@ -423,13 +418,21 @@ class NPSClient: ObservableObject {
     }
 
     // MARK: - Tunnels
+    /// NPS only matches tunnels with an explicit `type` (an empty type matches
+    /// nothing — verified against the live server), so query every known mode
+    /// and merge, mirroring the panel's per-type pages.
     func getTunnels(type: String = "", clientId: Int = 0, search: String = "", limit: Int = 10000) async -> [Tunnel] {
-        var q: [String: String] = ["offset": "0", "limit": "\(limit)"]
-        if !type.isEmpty { q["type"] = type }
-        if clientId != 0 { q["client_id"] = "\(clientId)" }
-        if !search.isEmpty { q["search"] = search }
-        let resp: TableResponse<Tunnel>? = await get("Index/GetTunnel", query: q)
-        return resp?.rows ?? []
+        let types = type.isEmpty
+            ? ["tcp", "udp", "socks5", "httpProxy", "file", "secret", "p2p"]
+            : [type]
+        var all: [Tunnel] = []
+        for t in types {
+            var p: [String: String] = ["offset": "0", "limit": "\(limit)", "search": search, "type": t]
+            if clientId != 0 { p["client_id"] = "\(clientId)" }
+            let r: TableResponse<Tunnel>? = await postTable("index/gettunnel", params: p)
+            if let r = r { all.append(contentsOf: r.rows) }
+        }
+        return all
     }
 
     func getTunnel(id: Int) async -> Tunnel? {
@@ -459,10 +462,9 @@ class NPSClient: ObservableObject {
 
     // MARK: - Hosts
     func getHosts(clientId: Int = 0, search: String = "", limit: Int = 10000) async -> [Host] {
-        var q: [String: String] = ["offset": "0", "limit": "\(limit)"]
-        if clientId != 0 { q["client_id"] = "\(clientId)" }
-        if !search.isEmpty { q["search"] = search }
-        let resp: TableResponse<Host>? = await get("Index/HostList", query: q)
+        var p: [String: String] = ["offset": "0", "limit": "\(limit)", "search": search]
+        if clientId != 0 { p["client_id"] = "\(clientId)" }
+        let resp: TableResponse<Host>? = await postTable("index/hostlist", params: p)
         return resp?.rows ?? []
     }
 
