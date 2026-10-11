@@ -53,7 +53,9 @@ class NPSClient: ObservableObject {
         KeychainHelper.delete(account: kBase)
         KeychainHelper.delete(account: kUser)
         KeychainHelper.delete(account: kPass)
-        cookieStorage.removeAllCookies()
+        if let cookies = cookieStorage.cookies {
+            for c in cookies { cookieStorage.deleteCookie(c) }
+        }
     }
 
     // MARK: - URL building
