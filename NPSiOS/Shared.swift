@@ -21,23 +21,23 @@ func formatInt(_ n: Int?) -> String {
 
 // MARK: - Status badge
 struct StatusBadge: View {
-    let on: Bool
+    let isOn: Bool
     let onText: String
     let offText: String
 
-    init(_ on: Bool, on: String = "在线", off: String = "离线") {
-        self.on = on
+    init(_ isOn: Bool, on: String = "在线", off: String = "离线") {
+        self.isOn = isOn
         self.onText = on
         self.offText = off
     }
 
     var body: some View {
-        Text(on ? onText : offText)
+        Text(isOn ? onText : offText)
             .font(.caption2.weight(.semibold))
             .padding(.horizontal, 8)
             .padding(.vertical, 3)
-            .background(on ? Color.green.opacity(0.15) : Color.gray.opacity(0.15))
-            .foregroundColor(on ? .green : .gray)
+            .background(isOn ? Color.green.opacity(0.15) : Color.gray.opacity(0.15))
+            .foregroundColor(isOn ? .green : .gray)
             .clipShape(Capsule())
     }
 }
