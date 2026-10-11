@@ -27,6 +27,8 @@ class NPSClient: ObservableObject {
     /// is more robust than relying on URLSession's automatic cookie handling
     /// (which can silently drop the session between requests on some setups).
     private var sessionCookie: String?
+    /// HTTP status of the last session-probe request (for diagnostics only).
+    private var lastProbeStatus: Int = 0
 
     private let kBase = "baseURL"
     private let kUser = "username"
@@ -125,24 +127,61 @@ class NPSClient: ObservableObject {
     private func markSessionExpired(path: String, httpStatus: Int) {
         sessionExpired = true
         isLoggedIn = false
+        let fp = cookieFingerprint()
         if sessionCookie == nil {
-            errorMessage = "会话Cookie未捕获，请求被重定向到登录页。路径 \(path)，HTTP \(httpStatus)。请重新登录；若反复出现请反馈此提示。"
+            errorMessage = "会话Cookie未捕获，请求被重定向到登录页。路径 \(path)，HTTP \(httpStatus)。请重新登录。"
         } else {
-            errorMessage = "服务器拒绝了会话并跳转登录页。路径 \(path)，HTTP \(httpStatus)，已携带会话Cookie。请重试；若反复出现请把此提示截图反馈。"
+            errorMessage = "服务器拒绝了会话并跳转登录页。路径 \(path)，HTTP \(httpStatus)，Cookie指纹 \(fp)。请重试一次登录；若反复出现请把此提示截图反馈。"
         }
+    }
+
+    /// Last 6 chars of the captured cookie — enough to tell whether the cookie
+    /// being replayed is the same one the server issued at login.
+    private func cookieFingerprint() -> String {
+        guard let c = sessionCookie else { return "无" }
+        return String(c.suffix(6))
     }
 
     // MARK: - Login / Logout
     @discardableResult
     func login(username: String, password: String, save: Bool = true) async -> Bool {
+        sessionExpired = false
+        for _ in 1...2 {
+            guard await loginOnce(username: username, password: password, save: save) else {
+                // Credentials wrong / network error / non-JSON response — the
+                // specific message is already set; never auto-retry these.
+                isLoggedIn = false
+                return false
+            }
+            // The server accepted the credentials. Verify the session actually
+            // works BEFORE entering the dashboard, so a cookie problem surfaces
+            // here (with detail) instead of as a mysterious bounce afterwards.
+            let (ok, status) = await probeWithSession()
+            if ok {
+                sessionExpired = false
+                errorMessage = nil
+                isLoggedIn = true
+                return true
+            }
+            // Session rejected — drop the captured cookie and try once more
+            // with a completely fresh login round (fresh session from server).
+            sessionCookie = nil
+            lastProbeStatus = status
+        }
+        let fp = cookieFingerprint()
+        errorMessage = "登录接口成功，但服务器拒绝了会话（已自动重试1次，Cookie指纹 \(fp)，验证请求HTTP \(lastProbeStatus)）。这不是密码错误。请在手机 Safari 浏览器打开同一地址测试网页版能否正常登录使用，并把结果截图反馈。"
+        isLoggedIn = false
+        return false
+    }
+
+    /// One raw login POST. Returns true only when the server reports success;
+    /// captures the session cookie from Set-Cookie on the way.
+    private func loginOnce(username: String, password: String, save: Bool) async -> Bool {
         guard let url = endpoint("Login/Verify") else {
             errorMessage = "请先填写服务器地址"
             return false
         }
         var req = URLRequest(url: url)
-        // A previous session-expiry (e.g. the silent auto-login getting kicked)
-        // must not suppress the error message of THIS attempt.
-        sessionExpired = false
         req.httpMethod = "POST"
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         req.httpBody = formBody(["username": username, "password": password])
@@ -168,29 +207,48 @@ class NPSClient: ObservableObject {
                 if save {
                     saveCredentials(url: baseURL, username: username, password: password)
                 }
-                sessionExpired = false
-                errorMessage = nil
-                isLoggedIn = true
                 return true
-            } else {
-                if let r = result, let msg = r.msg, !msg.isEmpty {
-                    errorMessage = msg
-                } else if let r = result {
-                    errorMessage = "登录失败（status=\(r.status ?? -1)）"
-                } else {
-                    // Response was not the expected JSON — surface what actually
-                    // came back so misconfigured base URLs / proxies are visible.
-                    let httpStatus = (response as? HTTPURLResponse)?.statusCode ?? 0
-                    let snippet = String(data: data.prefix(120), encoding: .utf8) ?? "(非文本响应)"
-                    errorMessage = "登录失败（HTTP \(httpStatus)）：响应不是有效的登录结果，请确认地址指向 NPS 后台。服务器返回：\(snippet)"
-                }
-                isLoggedIn = false
-                return false
             }
+            if let r = result, let msg = r.msg, !msg.isEmpty {
+                errorMessage = msg
+            } else if let r = result {
+                errorMessage = "登录失败（status=\(r.status ?? -1)）"
+            } else {
+                // Response was not the expected JSON — surface what actually
+                // came back so misconfigured base URLs / proxies are visible.
+                let httpStatus = (response as? HTTPURLResponse)?.statusCode ?? 0
+                let snippet = String(data: data.prefix(120), encoding: .utf8) ?? "(非文本响应)"
+                errorMessage = "登录失败（HTTP \(httpStatus)）：响应不是有效的登录结果，请确认地址指向 NPS 后台。服务器返回：\(snippet)"
+            }
+            return false
         } catch {
             errorMessage = error.localizedDescription
-            isLoggedIn = false
             return false
+        }
+    }
+
+    /// Raw session probe: a cookie-carrying GET must return JSON (ok), not the
+    /// login page HTML (rejected). Does not touch error state.
+    private func probeWithSession() async -> (Bool, Int) {
+        guard var url = endpoint("Client/List") else { return (false, 0) }
+        var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        comps?.queryItems = [
+            URLQueryItem(name: "offset", value: "0"),
+            URLQueryItem(name: "limit", value: "1"),
+            URLQueryItem(name: "search", value: ""),
+            URLQueryItem(name: "sort", value: "Id"),
+            URLQueryItem(name: "order", value: "ASC"),
+        ]
+        if let u = comps?.url { url = u }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        applyAuth(&req)
+        do {
+            let (data, resp) = try await session.data(for: req)
+            let st = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            return (!isHTML(data), st)
+        } catch {
+            return (false, 0)
         }
     }
 
