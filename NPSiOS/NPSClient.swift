@@ -19,6 +19,9 @@ class NPSClient: ObservableObject {
     @Published var password: String = ""
     @Published var errorMessage: String?
     @Published var sessionExpired: Bool = false
+    /// Bumped on every successful login / account switch so the root view can
+    /// rebuild all tabs and reload data for the (possibly new) server.
+    @Published var sessionEpoch: UUID = UUID()
 
     private var session: URLSession
     private let cookieStorage = HTTPCookieStorage.shared
@@ -175,6 +178,7 @@ class NPSClient: ObservableObject {
                 sessionExpired = false
                 errorMessage = nil
                 isLoggedIn = true
+                sessionEpoch = UUID()
                 return true
             }
             // Session rejected — drop the captured cookie and try once more
@@ -316,6 +320,30 @@ class NPSClient: ObservableObject {
     /// screen will be pre-filled with the last-used address / username /
     /// password, so switching back or re-logging in needs zero typing.
     /// Use `clearCredentials()` only when something must be truly wiped.
+    /// Switch to another saved account WITHOUT going through the login screen:
+    /// drops the current session, logs in with the stored credentials, and on
+    /// success rebuilds the whole UI (sessionEpoch) so every tab reloads with
+    /// the new server's data. On failure the session is gone and the app falls
+    /// back to the login screen, which shows the error with the account filled.
+    func switchAccount(to account: NPSAccount) async -> Bool {
+        // Silently drop the live session of the current account.
+        sessionCookie = nil
+        if let cookies = cookieStorage.cookies {
+            for c in cookies { cookieStorage.deleteCookie(c) }
+        }
+        errorMessage = nil
+        sessionExpired = false
+        baseURL = account.baseURL
+        username = account.username
+        password = account.password
+        let ok = await login(username: account.username, password: account.password, save: true)
+        if ok {
+            // Move the switched-to account to the front / mark as last used.
+            _ = AccountStore.upsert(account)
+        }
+        return ok
+    }
+
     func logout() {
         if let url = endpoint("Login/Out") {
             var req = URLRequest(url: url)
