@@ -352,6 +352,10 @@ class NPSClient: ObservableObject {
             if isHTML(data) { markSessionExpired(path: path, httpStatus: st); return nil }
             return try JSONDecoder().decode(TableResponse<T>.self, from: data)
         } catch {
+            // After logout (or view dismissal) in-flight requests get cancelled
+            // and land here. Surfacing that would show a stale "网络错误:
+            // cancelled" on the login screen right after logging out.
+            guard isLoggedIn, !Task.isCancelled else { return nil }
             errorMessage = "网络错误（\(path)）：\(error.localizedDescription)"
             return nil
         }
@@ -376,6 +380,10 @@ class NPSClient: ObservableObject {
             }
             return r
         } catch {
+            // After logout (or view dismissal) in-flight requests get cancelled
+            // and land here. Surfacing that would show a stale "网络错误:
+            // cancelled" on the login screen right after logging out.
+            guard isLoggedIn, !Task.isCancelled else { return nil }
             errorMessage = "网络错误（\(path)）：\(error.localizedDescription)"
             return nil
         }
@@ -395,6 +403,10 @@ class NPSClient: ObservableObject {
             if isHTML(data) { markSessionExpired(path: path, httpStatus: st); return nil }
             return try JSONDecoder().decode(SingleResponse<T>.self, from: data)
         } catch {
+            // After logout (or view dismissal) in-flight requests get cancelled
+            // and land here. Surfacing that would show a stale "网络错误:
+            // cancelled" on the login screen right after logging out.
+            guard isLoggedIn, !Task.isCancelled else { return nil }
             errorMessage = "网络错误（\(path)）：\(error.localizedDescription)"
             return nil
         }
