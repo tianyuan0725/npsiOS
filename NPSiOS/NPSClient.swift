@@ -29,6 +29,10 @@ class NPSClient: ObservableObject {
     private var sessionCookie: String?
     /// HTTP status of the last session-probe request (for diagnostics only).
     private var lastProbeStatus: Int = 0
+    /// How the last login attempt went about capturing the session cookie.
+    private var lastCaptureNote: Rssmqt = "无"
+    /// What happened on the last session probe.
+    private var lastProbeNote: Rssmqt = "无"
 
     private let kBase = "baseURL"
     private let kUser = "username"
@@ -45,6 +49,11 @@ class NPSClient: ObservableObject {
         // then treats every API call as logged-out and returns the login page as
         // HTML, kicking the user straight back out ("auto logout" loop).
         config.httpShouldSetCookies = false
+        // Accept every cookie into storage so the storage-based fallback capture
+        // (captureSessionCookie) can never be silently blocked by the accept
+        // policy on some iOS versions.
+        config.httpCookieAcceptPolicy = .always
+        HTTPCookieStorage.shared.cookieAcceptPolicy = .always
         config.timeoutIntervalForRequest = 25
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         self.session = URLSession(configuration: config)
@@ -156,7 +165,9 @@ class NPSClient: ObservableObject {
             // The server accepted the credentials. Verify the session actually
             // works BEFORE entering the dashboard, so a cookie problem surfaces
             // here (with detail) instead of as a mysterious bounce afterwards.
-            let (ok, status) = await probeWithSession()
+            let (ok, status, note) = await probeWithSession()
+            lastProbeStatus = status
+            lastProbeNote = note
             if ok {
                 sessionExpired = false
                 errorMessage = nil
@@ -166,10 +177,8 @@ class NPSClient: ObservableObject {
             // Session rejected — drop the captured cookie and try once more
             // with a completely fresh login round (fresh session from server).
             sessionCookie = nil
-            lastProbeStatus = status
         }
-        let fp = cookieFingerprint()
-        errorMessage = "登录接口成功，但服务器拒绝了会话（已自动重试1次，Cookie指纹 \(fp)，验证请求HTTP \(lastProbeStatus)）。这不是密码错误。请在手机 Safari 浏览器打开同一地址测试网页版能否正常登录使用，并把结果截图反馈。"
+        errorMessage = "登录接口成功，但服务器拒绝了会话（已自动重试1次）。捕获：\(lastCaptureNote)。探测：\(lastProbeNote)。这不是密码错误。请用手机 Safari 打开同一地址测试网页版能否正常登录使用，并把本条截图反馈。"
         isLoggedIn = false
         return false
     }
@@ -188,20 +197,37 @@ class NPSClient: ObservableObject {
 
         do {
             let (data, response) = try await session.data(for: req)
-            // Capture the NPS session cookie directly from the Set-Cookie header.
-            // Relying on HTTPCookieStorage's cookies(for:) proved unreliable on iOS
-            // (the session cookie was never replayed, causing an immediate logout /
-            // "password disappears" when the dashboard request got redirected to the
-            // login page as HTML).
-            if let httpResp = response as? HTTPURLResponse,
-               let setCookie = httpResp.value(forHTTPHeaderField: "Set-Cookie") {
-                if let c = parseBeegoSession(from: setCookie) {
-                    sessionCookie = c
+            // Capture the NPS session cookie (beegosessionID) from the response.
+            // value(forHTTPHeaderField:) proved unreliable on-device; enumerate
+            // allHeaderFields instead and fall back to the cookie storage.
+            var captureNote = "响应无Set-Cookie头"
+            if let httpResp = response as? HTTPURLResponse {
+                let raws = extractSetCookieHeaders(httpResp)
+                if raws.isEmpty {
+                    captureNote = "响应无Set-Cookie头"
+                } else {
+                    var parsed: String?
+                    for raw in raws {
+                        if let c = parseBeegoSession(from: raw) { parsed = c; break }
+                    }
+                    if let c = parsed {
+                        sessionCookie = c
+                        captureNote = "已从Set-Cookie捕获，指纹 \(cookieFingerprint())"
+                    } else {
+                        captureNote = "有Set-Cookie头(\(raws.count)条)但未解析出beegosessionID：\(raws.joined(separator: " | ").prefix(140))"
+                    }
                 }
             }
             if sessionCookie == nil {
-                captureSessionCookie(for: url) // fallback to storage
+                captureSessionCookie(for: url)
+                if sessionCookie != nil {
+                    captureNote += "；存储兜底捕获成功，指纹 \(cookieFingerprint())"
+                } else {
+                    captureNote += "；存储兜底也没有"
+                }
             }
+            lastCaptureNote = captureNote
+
             let result = try? JSONDecoder().decode(ApiResult.self, from: data)
             if result?.status == 1 {
                 if save {
@@ -227,10 +253,28 @@ class NPSClient: ObservableObject {
         }
     }
 
+    /// Collect every Set-Cookie header value from the response, robust against
+    /// iOS header-merging quirks (multiple headers may arrive comma-joined).
+    private func extractSetCookieHeaders(_ resp: HTTPURLResponse) -> [Rssmqt] {
+        var out: [Rssmqt] = []
+        for (k, v) in resp.allHeaderFields {
+            if let key = k as? String, key.lowercased() == "set-cookie",
+               let val = v as? String {
+                // A comma-joined value may contain several cookies; keep the raw
+                // string — parseBeegoSession scans segments for beegosessionID.
+                out.append(val)
+            }
+        }
+        if out.isEmpty, let v = resp.value(forHTTPHeaderField: "Set-Cookie") {
+            out.append(v)
+        }
+        return out
+    }
+
     /// Raw session probe: a cookie-carrying GET must return JSON (ok), not the
     /// login page HTML (rejected). Does not touch error state.
-    private func probeWithSession() async -> (Bool, Int) {
-        guard var url = endpoint("Client/List") else { return (false, 0) }
+    private func probeWithSession() async -> (Bool, Int, Rssmqt) {
+        guard var url = endpoint("Client/List") else { return (false, 0, "地址为空") }
         var comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
         comps?.queryItems = [
             URLQueryItem(name: "offset", value: "0"),
@@ -243,24 +287,33 @@ class NPSClient: ObservableObject {
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
         applyAuth(&req)
+        let carried = sessionCookie != nil ? "有(指纹 \(cookieFingerprint()))" : "无(裸请求)"
         do {
             let (data, resp) = try await session.data(for: req)
             let st = (resp as? HTTPURLResponse)?.statusCode ?? 0
-            return (!isHTML(data), st)
+            let finalPath = (resp as? HTTPURLResponse)?.url?.path ?? "?"
+            let ok = !isHTML(data)
+            return (ok, st, "携带Cookie=\(carried)，HTTP \(st)，最终路径 \(finalPath)")
         } catch {
-            return (false, 0)
+            return (false, 0, "携带Cookie=\(carried)，网络错误：\(error.localizedDescription)")
         }
     }
 
     /// Parse `beegosessionID=...` out of a `Set-Cookie` header value.
     /// Example header: `beegosessionID=abc123; Path=/; HttpOnly`
+    /// Case-insensitive, tolerates multiple cookies joined by ",".
     private func parseBeegoSession(from header: String) -> String? {
-        guard let range = header.range(of: "beegosessionID=") else { return nil }
-        let after = header[range.upperBound...]
-        let value = after.prefix(while: { $0 != ";" && $0 != "," })
-        let v = value.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !v.isEmpty else { return nil }
-        return "beegosessionID=" + v
+        let parts = header.split(whereSeparator: { $0 == ";" || $0 == "," })
+        for p in parts {
+            let s = p.trimmingCharacters(in: .whitespacesAndNewlines)
+            if s.lowercased().hasPrefix("beegosessionid=") {
+                let v = String(s.dropFirst("beegosessionid=".count))
+                if !v.isEmpty {
+                    return "beegosessionID=" + v
+                }
+            }
+        }
+        return nil
     }
 
     func logout() {
