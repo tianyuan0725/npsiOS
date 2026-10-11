@@ -1,0 +1,56 @@
+name: Build NPS iOS IPA
+
+on:
+  workflow_dispatch:        # 允许在 GitHub 网页上手动点 “Run workflow” 触发
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: macos-latest   # GitHub 免费提供的 macOS 云构建机（含完整 Xcode + iOS SDK）
+    steps:
+      - name: Checkout 代码
+        uses: actions/checkout@v4
+
+      - name: 选择完整版 Xcode（iOS 编译必须用完整 Xcode，而非命令行工具）
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: 打印 xcodebuild 版本（便于排查）
+        run: xcodebuild -version
+
+      - name: 编译 .app（关闭签名，产出未签名包，留给本地 Sideloadly 签名）
+        run: |
+          xcodebuild build \
+            -project NPSiOS.xcodeproj \
+            -target NPSiOS \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_IDENTITY="" \
+            DEVELOPMENT_TEAM="" \
+            SYMROOT="$PWD/build"
+          echo "APP_PATH=$PWD/build/Release-iphoneos/NPSiOS.app" >> "$GITHUB_ENV"
+
+      - name: 校验 .app 是否真的生成
+        run: |
+          if [ ! -d "$APP_PATH" ]; then
+            echo "::error::未找到编译产物 $APP_PATH，编译可能失败"
+            exit 1
+          fi
+          echo "找到 .app: $APP_PATH"
+
+      - name: 打包成未签名 IPA
+        run: |
+          mkdir -p build/Payload
+          cp -r "$APP_PATH" build/Payload/
+          cd build
+          zip -r NPSiOS.ipa Payload
+          ls -la NPSiOS.ipa
+
+      - name: 上传 IPA 作为构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: NPSiOS-unsigned-ipa
+          path: build/NPSiOS.ipa
+          if-no-files-found: error

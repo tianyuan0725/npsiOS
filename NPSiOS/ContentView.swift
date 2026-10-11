@@ -1,0 +1,41 @@
+import SwiftUI
+
+struct RootView: View {
+    @EnvironmentObject var client: NPSClient
+
+    var body: some View {
+        if client.isLoggedIn {
+            MainTabView()
+        } else {
+            LoginView()
+        }
+    }
+}
+
+struct MainTabView: View {
+    @EnvironmentObject var client: NPSClient
+
+    var body: some View {
+        TabView {
+            DashboardView()
+                .tabItem { Label("仪表盘", systemImage: "gauge.medium") }
+            ClientsView()
+                .tabItem { Label("客户端", systemImage: "desktopcomputer") }
+            TunnelsView()
+                .tabItem { Label("隧道", systemImage: "point.topleft.down.curvedto.point.bottomright.up") }
+            HostsView()
+                .tabItem { Label("主机", systemImage: "globe") }
+            SettingsView()
+                .tabItem { Label("设置", systemImage: "gearshape") }
+        }
+        .accentColor(.blue)
+        .alert("提示", isPresented: Binding(
+            get: { client.errorMessage != nil && !client.sessionExpired },
+            set: { if !$0 { client.errorMessage = nil } }
+        )) {
+            Button("确定") { client.errorMessage = nil }
+        } message: {
+            Text(client.errorMessage ?? "")
+        }
+    }
+}

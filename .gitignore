@@ -1,0 +1,9 @@
+# Xcode 用户数据（含签名缓存，不应入库）
+NPSiOS.xcodeproj/xcuserdata/
+NPSiOS.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+
+# macOS
+.DS_Store
