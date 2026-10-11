@@ -37,7 +37,7 @@ struct LoginView: View {
                         }
                     }
 
-                    if let msg = client.errorMessage, !client.sessionExpired {
+                    if let msg = client.errorMessage {
                         Text(msg)
                             .font(.caption)
                             .foregroundColor(.red)
@@ -77,9 +77,13 @@ struct LoginView: View {
             .navigationBarHidden(true)
         }
         .onAppear {
-            // Pre-fill from saved credentials for convenience.
+            // Pre-fill from saved credentials for convenience (password included —
+            // it lives in the Keychain and must survive view rebuilds / relaunch).
             if let u = KeychainHelper.read(account: "baseURL") { baseURL = u }
             if let n = KeychainHelper.read(account: "username") { client.username = n }
+            if client.password.isEmpty, let p = KeychainHelper.read(account: "password") {
+                client.password = p
+            }
         }
     }
 
