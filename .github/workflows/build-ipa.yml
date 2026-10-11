@@ -15,10 +15,21 @@ jobs:
       - name: 选择完整版 Xcode（iOS 编译必须用完整 Xcode，而非命令行工具）
         run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 
-      - name: 打印 xcodebuild 版本（便于排查）
-        run: xcodebuild -version
+      - name: 安装 xcodegen（由它生成语法合法的 Xcode 工程，规避手搓 pbxproj 的解析错误）
+        run: |
+          curl -L -o /tmp/xcodegen.zip https://github.com/yonaskolb/xcodegen/releases/download/2.46.0/xcodegen.zip
+          rm -rf /tmp/xg && mkdir -p /tmp/xg
+          unzip -o /tmp/xcodegen.zip -d /tmp/xg >/dev/null
+          BIN=$(find /tmp/xg -name xcodegen -type f | head -1)
+          echo "found xcodegen at: $BIN"
+          sudo cp "$BIN" /usr/local/bin/xcodegen
+          sudo chmod +x /usr/local/bin/xcodegen
+          xcodegen version
 
-      - name: 编译 .app（关闭签名，产出未签名包，留给本地 Sideloadly 签名）
+      - name: 生成 NPSiOS.xcodeproj（基于 project.yml）
+        run: xcodegen generate
+
+      - name: 编译 .app（关闭签名，产出未签名包，给 TrollStore 直接安装）
         run: |
           xcodebuild build \
             -project NPSiOS.xcodeproj \
