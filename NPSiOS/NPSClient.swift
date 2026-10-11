@@ -65,6 +65,9 @@ class NPSClient: ObservableObject {
         if let url = KeychainHelper.read(account: kBase) { self.baseURL = url }
         if let user = KeychainHelper.read(account: kUser) { self.username = user }
         if let pass = KeychainHelper.read(account: kPass) { self.password = pass }
+        // Move any legacy single-account credentials into the multi-account
+        // store (no-op when the account list already exists).
+        AccountStore.migrateLegacy()
         // NOTE: no silent auto-login here on purpose. A background auto-login races
         // with a manual login: the late auto-login response overwrites the FRESH
         // sessionCookie captured by the manual one (NPS invalidates/rotates session
@@ -309,6 +312,10 @@ class NPSClient: ObservableObject {
         return nil
     }
 
+    /// Log out of the current session but KEEP all saved accounts. The login
+    /// screen will be pre-filled with the last-used address / username /
+    /// password, so switching back or re-logging in needs zero typing.
+    /// Use `clearCredentials()` only when something must be truly wiped.
     func logout() {
         if let url = endpoint("Login/Out") {
             var req = URLRequest(url: url)
@@ -317,7 +324,13 @@ class NPSClient: ObservableObject {
                 try? await session.data(for: req)
             }
         }
-        clearCredentials()
+        // Drop only the live session state.
+        sessionCookie = nil
+        if let cookies = cookieStorage.cookies {
+            for c in cookies { cookieStorage.deleteCookie(c) }
+        }
+        errorMessage = nil
+        sessionExpired = false
         isLoggedIn = false
     }
 
