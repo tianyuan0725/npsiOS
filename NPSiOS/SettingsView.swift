@@ -3,6 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var client: NPSClient
     @State private var showLogoutConfirm: Bool = false
+    @State private var switchingID: String? = nil
 
     var body: some View {
         NavigationStack {
@@ -40,10 +41,21 @@ struct SettingsView: View {
                                 Spacer()
                                 if acc.baseURL == client.baseURL && acc.username == client.username {
                                     Text("当前").font(.caption).foregroundColor(.blue)
+                                } else if switchingID == acc.id {
+                                    ProgressView()
+                                } else {
+                                    // One-tap switch: logs in with the saved
+                                    // credentials without leaving the app.
+                                    Button("切换") {
+                                        Task { await switchTo(acc) }
+                                    }
+                                    .buttonStyle(.bordered)
+                                    .tint(.blue)
+                                    .font(.caption.weight(.semibold))
                                 }
                             }
                         }
-                        Text("退出登录后账号仍会保留，重新登录无需重新输入；切换服务器在登录页的「已保存账号」列表中点击即可。")
+                        Text("点击「切换」直接登录到对应账号，无需退出；退出登录后凭据仍会保留。")
                             .font(.caption)
                             .foregroundColor(.secondary)
                     }
@@ -61,7 +73,7 @@ struct SettingsView: View {
                 Section("关于 NPS iOS") {
                     LabeledRow(title: "项目", value: "https://github.com/ehang-io/nps")
                     LabeledRow(title: "功能", value: "管理 NPS 内网穿透服务器")
-                    LabeledRow(title: "版本", value: "1.0.1")
+                    LabeledRow(title: "版本", value: "1.0.2")
                     Text("本应用通过 NPS Web 后台 API 管理你的服务器：查看客户端/隧道/主机、增删改、启停隧道、查看流量与在线状态。凭据保存在本机钥匙串，不上传任何第三方。")
                         .font(.caption)
                         .foregroundColor(.secondary)
@@ -79,6 +91,13 @@ struct SettingsView: View {
                 Button("退出", role: .destructive) { client.logout() }
             }
         }
+    }
+
+    /// Directly log in to another saved account from Settings.
+    private func switchTo(_ acc: NPSAccount) async {
+        switchingID = acc.id
+        defer { switchingID = nil }
+        _ = await client.switchAccount(to: acc)
     }
 }
 
