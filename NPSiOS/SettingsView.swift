@@ -8,19 +8,44 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 Section("当前服务器") {
-                    if let url = KeychainHelper.read(account: "baseURL") {
+                    if !client.baseURL.isEmpty {
                         HStack {
                             Text("地址")
                             Spacer()
-                            Text(url).foregroundColor(.secondary).font(.callout)
+                            Text(client.baseURL).foregroundColor(.secondary).font(.callout)
                         }
                     }
-                    if let user = KeychainHelper.read(account: "username") {
+                    if !client.username.isEmpty {
                         HStack {
                             Text("用户名")
                             Spacer()
-                            Text(user).foregroundColor(.secondary).font(.callout)
+                            Text(client.username).foregroundColor(.secondary).font(.callout)
                         }
+                    }
+                }
+
+                Section("已保存账号") {
+                    let saved = AccountStore.load()
+                    if saved.isEmpty {
+                        Text("暂无").foregroundColor(.secondary).font(.callout)
+                    } else {
+                        ForEach(saved) { acc in
+                            HStack {
+                                Image(systemName: acc.scheme == "https" ? "lock.shield" : "server.rack")
+                                    .foregroundColor(.blue)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(acc.baseURL).font(.callout)
+                                    Text(acc.username).font(.caption).foregroundColor(.secondary)
+                                }
+                                Spacer()
+                                if acc.baseURL == client.baseURL && acc.username == client.username {
+                                    Text("当前").font(.caption).foregroundColor(.blue)
+                                }
+                            }
+                        }
+                        Text("退出登录后账号仍会保留，重新登录无需重新输入；切换服务器在登录页的「已保存账号」列表中点击即可。")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
                     }
                 }
 
