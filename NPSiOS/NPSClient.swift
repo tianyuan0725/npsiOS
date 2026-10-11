@@ -35,16 +35,30 @@ class NPSClient: ObservableObject {
     private init() {
         let config = URLSessionConfiguration.default
         config.httpCookieStorage = cookieStorage
-        config.httpShouldSetCookies = true
+        // Deterministic cookie handling: the session cookie is replayed manually
+        // via applyAuth(). With httpShouldSetCookies enabled, URLSession merges a
+        // possibly STALE beegosessionID from the shared storage into every request
+        // (a session cookie is issued even for FAILED login attempts and gets
+        // auto-stored), which overrides/conflicts with the fresh one — the server
+        // then treats every API call as logged-out and returns the login page as
+        // HTML, kicking the user straight back out ("auto logout" loop).
+        config.httpShouldSetCookies = false
         config.timeoutIntervalForRequest = 25
         config.requestCachePolicy = .reloadIgnoringLocalCacheData
         self.session = URLSession(configuration: config)
 
-        // Restore previously saved credentials and silently re-login.
+        // Restore saved credentials into the published fields so the login form
+        // is pre-filled (password INCLUDED) on every launch. Previously only the
+        // base URL was restored here, so the password field always looked "wiped"
+        // after relaunching the app even though it was saved in the Keychain.
+        if let url = KeychainHelper.read(account: kBase) { self.baseURL = url }
+        if let user = KeychainHelper.read(account: kUser) { self.username = user }
+        if let pass = KeychainHelper.read(account: kPass) { self.password = pass }
+        // Silent auto-login when a complete set of credentials exists.
         if let url = KeychainHelper.read(account: kBase),
            let user = KeychainHelper.read(account: kUser),
-           let pass = KeychainHelper.read(account: kPass) {
-            self.baseURL = url
+           let pass = KeychainHelper.read(account: kPass),
+           !url.isEmpty, !user.isEmpty, !pass.isEmpty {
             Task { await login(username: user, password: pass, save: false) }
         }
     }
@@ -124,6 +138,9 @@ class NPSClient: ObservableObject {
             return false
         }
         var req = URLRequest(url: url)
+        // A previous session-expiry (e.g. the silent auto-login getting kicked)
+        // must not suppress the error message of THIS attempt.
+        sessionExpired = false
         req.httpMethod = "POST"
         req.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         req.httpBody = formBody(["username": username, "password": password])
@@ -154,7 +171,17 @@ class NPSClient: ObservableObject {
                 isLoggedIn = true
                 return true
             } else {
-                errorMessage = result?.msg ?? "登录失败（服务器未返回结果）"
+                if let r = result, let msg = r.msg, !msg.isEmpty {
+                    errorMessage = msg
+                } else if let r = result {
+                    errorMessage = "登录失败（status=\(r.status ?? -1)）"
+                } else {
+                    // Response was not the expected JSON — surface what actually
+                    // came back so misconfigured base URLs / proxies are visible.
+                    let httpStatus = (response as? HTTPURLResponse)?.statusCode ?? 0
+                    let snippet = String(data: data.prefix(120), encoding: .utf8) ?? "(非文本响应)"
+                    errorMessage = "登录失败（HTTP \(httpStatus)）：响应不是有效的登录结果，请确认地址指向 NPS 后台。服务器返回：\(snippet)"
+                }
                 isLoggedIn = false
                 return false
             }
