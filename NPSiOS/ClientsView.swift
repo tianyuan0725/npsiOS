@@ -51,7 +51,11 @@ struct ClientsView: View {
                 }
             }
             .searchable(text: $searchText, prompt: "搜索备注/IP")
-            .refreshable { await load() }
+            .refreshable {
+                // Unstructured task: SwiftUI may cancel the refreshable task's
+                // context mid-flight; a cancelled request used to wipe the list.
+                await Task { @MainActor in await load() }.value
+            }
             .overlay { if isLoading && clients.isEmpty { LoadingView() } }
             .task { await load() }
         }
@@ -60,7 +64,8 @@ struct ClientsView: View {
     private func load() async {
         isLoading = true
         defer { isLoading = false }
-        clients = await client.getClients()
+        // nil = fetch failed: keep the current rows instead of blanking out.
+        if let v = await client.getClients() { clients = v }
     }
 
     private func remove(_ c: Client) async {
