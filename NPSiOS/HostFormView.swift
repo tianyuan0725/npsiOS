@@ -77,7 +77,7 @@ struct HostFormView: View {
     }
 
     private func prepare() async {
-        clients = await client.getClients()
+        clients = await client.getClients() ?? []
         guard let h = editing else { return }
         remark = h.remark ?? ""
         host = h.host ?? ""
