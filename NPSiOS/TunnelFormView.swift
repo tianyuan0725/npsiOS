@@ -81,7 +81,7 @@ struct TunnelFormView: View {
     }
 
     private func prepare() async {
-        clients = await client.getClients()
+        clients = await client.getClients() ?? []
         guard let t = editing else { return }
         remark = t.remark ?? ""
         mode = t.mode ?? "tcp"
