@@ -16,17 +16,22 @@ struct MainTabView: View {
     @EnvironmentObject var client: NPSClient
 
     var body: some View {
-        TabView {
+        TabView(selection: $client.selectedTab) {
             DashboardView()
                 .tabItem { Label("仪表盘", systemImage: "gauge.medium") }
+                .tag(0)
             ClientsView()
                 .tabItem { Label("客户端", systemImage: "desktopcomputer") }
+                .tag(1)
             TunnelsView()
                 .tabItem { Label("隧道", systemImage: "point.topleft.down.curvedto.point.bottomright.up") }
+                .tag(2)
             HostsView()
                 .tabItem { Label("主机", systemImage: "globe") }
+                .tag(3)
             SettingsView()
                 .tabItem { Label("设置", systemImage: "gearshape") }
+                .tag(4)
         }
         .accentColor(.blue)
         // Rebuild all tabs whenever the session changes (login or account
