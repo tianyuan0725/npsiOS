@@ -118,10 +118,12 @@ struct SettingsView: View {
                                         .foregroundColor(.secondary)
                                         .lineLimit(12)
                                 }
-                                if let url = rel.assets.first(where: { $0.name.lowercased().hasSuffix(".ipa") })?.browser_download_url
-                                    .flatMap(URL.init(string:)) {
+                                let ipaAsset = rel.assets.first {
+                                    $0.name.lowercased().hasSuffix(".ipa")
+                                }
+                                if let downloadURL = ipaAsset.flatMap({ URL(string: $0.browser_download_url) }) {
                                     Button {
-                                        UIApplication.shared.open(url)
+                                        UIApplication.shared.open(downloadURL)
                                     } label: {
                                         Label("下载 IPA（Safari 打开后用巨魔安装）", systemImage: "arrow.down.circle.fill")
                                             .frame(maxWidth: .infinity)
