@@ -22,6 +22,9 @@ class NPSClient: ObservableObject {
     /// Bumped on every successful login / account switch so the root view can
     /// rebuild all tabs and reload data for the (possibly new) server.
     @Published var sessionEpoch: UUID = UUID()
+    /// Currently selected tab (0 仪表盘, 1 客户端, 2 隧道, 3 主机, 4 设置).
+    /// Dashboard stat cards jump to a tab by setting this.
+    @Published var selectedTab: Int = 0
 
     private var session: URLSession
     private let cookieStorage = HTTPCookieStorage.shared
@@ -441,12 +444,15 @@ class NPSClient: ObservableObject {
     }
 
     // MARK: - Clients
-    func getClients(search: String = "", limit: Int = 10000) async -> [Client] {
-        // NOTE: sort/order MUST stay empty — NPS panics (beego 500) on sort=Id.
+    /// Returns nil when the request FAILED (network error / session rejected)
+    /// and an empty array when the server genuinely has no rows — callers keep
+    /// their old data on nil instead of wiping the UI to zeros.
+    /// NOTE: sort/order MUST stay empty — NPS panics (beego 500) on sort=Id.
+    func getClients(search: String = "", limit: Int = 10000) async -> [Client]? {
         let resp: TableResponse<Client>? = await postTable("client/list", params: [
             "offset": "0", "limit": "\(limit)", "search": search, "sort": "", "order": ""
         ])
-        return resp?.rows ?? []
+        return resp?.rows
     }
 
     func getClient(id: Int) async -> Client? {
@@ -474,7 +480,7 @@ class NPSClient: ObservableObject {
     /// NPS only matches tunnels with an explicit `type` (an empty type matches
     /// nothing — verified against the live server), so query every known mode
     /// and merge, mirroring the panel's per-type pages.
-    func getTunnels(type: String = "", clientId: Int = 0, search: String = "", limit: Int = 10000) async -> [Tunnel] {
+    func getTunnels(type: String = "", clientId: Int = 0, search: String = "", limit: Int = 10000) async -> [Tunnel]? {
         let types = type.isEmpty
             ? ["tcp", "udp", "socks5", "httpProxy", "file", "secret", "p2p"]
             : [type]
@@ -483,7 +489,8 @@ class NPSClient: ObservableObject {
             var p: [String: String] = ["offset": "0", "limit": "\(limit)", "search": search, "type": t]
             if clientId != 0 { p["client_id"] = "\(clientId)" }
             let r: TableResponse<Tunnel>? = await postTable("index/gettunnel", params: p)
-            if let r = r { all.append(contentsOf: r.rows) }
+            guard let rows = r?.rows else { return nil } // any failed type fails the whole fetch
+            all.append(contentsOf: rows)
         }
         return all
     }
@@ -514,11 +521,11 @@ class NPSClient: ObservableObject {
     }
 
     // MARK: - Hosts
-    func getHosts(clientId: Int = 0, search: String = "", limit: Int = 10000) async -> [Host] {
+    func getHosts(clientId: Int = 0, search: String = "", limit: Int = 10000) async -> [Host]? {
         var p: [String: String] = ["offset": "0", "limit": "\(limit)", "search": search]
         if clientId != 0 { p["client_id"] = "\(clientId)" }
         let resp: TableResponse<Host>? = await postTable("index/hostlist", params: p)
-        return resp?.rows ?? []
+        return resp?.rows
     }
 
     func getHost(id: Int) async -> Host? {
