@@ -27,12 +27,19 @@ struct DashboardView: View {
                 } else {
                     LazyVStack(spacing: 16) {
                         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
-                            StatCard(title: "客户端总数", value: "\(clients.count)", icon: "desktopcomputer", accent: .blue)
-                            StatCard(title: "在线客户端", value: "\(onlineCount)", icon: "wifi", accent: .green)
-                            StatCard(title: "隧道总数", value: "\(tunnels.count)", icon: "point.topleft.down.curvedto.point.bottomright.up", accent: .orange)
-                            StatCard(title: "主机(域名)数", value: "\(hosts.count)", icon: "globe", accent: .purple)
-                            StatCard(title: "入站流量", value: formatBytes(inlet), icon: "arrow.down.circle", accent: .teal)
-                            StatCard(title: "出站流量", value: formatBytes(export), icon: "arrow.up.circle", accent: .indigo)
+                            // 客户端总数 / 隧道总数 tap through to the matching tab.
+                            statButton(title: "客户端总数", value: "\(clients.count)",
+                                       icon: "desktopcomputer", accent: .blue, tab: 1)
+                            statCard(title: "在线客户端", value: "\(onlineCount)",
+                                     icon: "wifi", accent: .green)
+                            statButton(title: "隧道总数", value: "\(tunnels.count)",
+                                       icon: "point.topleft.down.curvedto.point.bottomright.up", accent: .orange, tab: 2)
+                            statButton(title: "主机(域名)数", value: "\(hosts.count)",
+                                       icon: "globe", accent: .purple, tab: 3)
+                            statCard(title: "入站流量", value: formatBytes(inlet),
+                                     icon: "arrow.down.circle", accent: .teal)
+                            statCard(title: "出站流量", value: formatBytes(export),
+                                     icon: "arrow.up.circle", accent: .indigo)
                         }
 
                         VStack(alignment: .leading, spacing: 10) {
@@ -89,9 +96,30 @@ struct DashboardView: View {
                 }
             }
             .navigationTitle("仪表盘")
-            .refreshable { await load() }
+            .refreshable {
+                // Run the reload in an UNSTRUCTURED task: SwiftUI can cancel the
+                // refreshable task's context mid-flight, and a cancelled
+                // URLSession request used to silently wipe the dashboard to
+                // zeros. An unstructured task does not inherit cancellation.
+                await Task { @MainActor in await load() }.value
+            }
             .task { await load() }
         }
+    }
+
+    private func statCard(title: String, value: String, icon: String, accent: Color) -> some View {
+        StatCard(title: title, value: value, icon: icon, accent: accent)
+    }
+
+    /// Stat card that jumps straight to the matching tab.
+    private func statButton(title: String, value: String, icon: String, accent: Color, tab: Int) -> some View {
+        Button {
+            client.selectedTab = tab
+        } label: {
+            StatCard(title: title, value: value, icon: icon, accent: accent)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
     }
 
     private func load() async {
@@ -100,9 +128,12 @@ struct DashboardView: View {
         async let c = client.getClients()
         async let t = client.getTunnels()
         async let h = client.getHosts()
-        clients = await c
-        tunnels = await t
-        hosts = await h
+        // Only replace data on SUCCESS (non-nil). A failed refresh keeps the
+        // current values instead of wiping everything to zeros; the specific
+        // error is surfaced by NPSClient.
+        if let v = await c { clients = v }
+        if let v = await t { tunnels = v }
+        if let v = await h { hosts = v }
     }
 }
 
