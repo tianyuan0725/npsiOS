@@ -47,7 +47,11 @@ struct HostsView: View {
                 }
             }
             .searchable(text: $searchText, prompt: "搜索域名/备注")
-            .refreshable { await load() }
+            .refreshable {
+                // Unstructured task: SwiftUI may cancel the refreshable task's
+                // context mid-flight; a cancelled request used to wipe the list.
+                await Task { @MainActor in await load() }.value
+            }
             .overlay { if isLoading && hosts.isEmpty { LoadingView() } }
             .task { await load() }
         }
@@ -56,7 +60,8 @@ struct HostsView: View {
     private func load() async {
         isLoading = true
         defer { isLoading = false }
-        hosts = await client.getHosts()
+        // nil = fetch failed: keep the current rows instead of blanking out.
+        if let v = await client.getHosts() { hosts = v }
     }
 
     private func remove(_ h: Host) async {
