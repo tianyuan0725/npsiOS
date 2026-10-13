@@ -53,7 +53,11 @@ struct TunnelsView: View {
                 }
             }
             .searchable(text: $searchText, prompt: "搜索备注/目标")
-            .refreshable { await load() }
+            .refreshable {
+                // Unstructured task: SwiftUI may cancel the refreshable task's
+                // context mid-flight; a cancelled request used to wipe the list.
+                await Task { @MainActor in await load() }.value
+            }
             .overlay { if isLoading && tunnels.isEmpty { LoadingView() } }
             .task { await load() }
         }
@@ -62,7 +66,8 @@ struct TunnelsView: View {
     private func load() async {
         isLoading = true
         defer { isLoading = false }
-        tunnels = await client.getTunnels()
+        // nil = fetch failed: keep the current rows instead of blanking out.
+        if let v = await client.getTunnels() { tunnels = v }
     }
 
     private func remove(_ t: Tunnel) async {
